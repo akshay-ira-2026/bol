@@ -1,0 +1,81 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f3d2e"><title>Bol · speak messy, get clean text</title>
+<link rel="manifest" href="/manifest.json">
+<style>
+:root{--g:#0f3d2e;--a:#f2b134;--bg:#f6f4ee;--ink:#1b1b1b}
+*{box-sizing:border-box}body{margin:0;font:18px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+header{background:var(--g);color:#fff;padding:14px 16px;display:flex;align-items:center;gap:10px}
+header h1{font-size:22px;margin:0}header small{opacity:.8;font-size:13px}
+main{padding:14px;max-width:720px;margin:auto}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
+select,button{font:inherit;font-size:16px;border-radius:12px;border:1px solid #ccc;padding:8px 12px;background:#fff}
+#mic{width:96px;height:96px;border-radius:50%;border:0;background:var(--g);color:#fff;font-size:40px;display:block;margin:14px auto;box-shadow:0 4px 14px #0003}
+#mic.on{background:#c0392b;animation:p 1.2s infinite}@keyframes p{50%{transform:scale(1.07)}}
+#status{text-align:center;font-size:15px;color:#555;min-height:22px}
+.box{background:#fff;border-radius:14px;padding:12px;margin:10px 0;box-shadow:0 1px 4px #0001}
+.box h2{font-size:14px;margin:0 0 6px;color:#666;text-transform:uppercase;letter-spacing:.04em}
+#raw{color:#777;font-size:16px;min-height:24px;white-space:pre-wrap}
+#out{width:100%;min-height:180px;border:0;font:inherit;font-size:19px;resize:vertical;outline:none}
+.meta{font-size:14px;color:#666;display:flex;justify-content:space-between}
+.act button{flex:1}
+.primary{background:var(--a);border-color:var(--a);font-weight:600}
+#hist div{border-top:1px solid #eee;padding:8px 0;font-size:15px;cursor:pointer}
+.tip{font-size:14px;color:#555}
+</style></head><body>
+<header><div><h1>Bol · बोल</h1><small>speak messy, get clean text. free, no login, no model on your phone</small></div></header>
+<main>
+<div class="row">
+ <select id="lang"><option value="en-IN">English (India)</option><option value="hi-IN">हिन्दी</option><option value="mr-IN">मराठी</option><option value="kn-IN">ಕನ್ನಡ</option></select>
+ <select id="mode"><option value="plain">Plain text</option><option value="message">Message</option><option value="mains">Mains answer</option><option value="notes">Notes (points)</option></select>
+ <select id="polish"><option value="rules">Instant cleanup (on phone)</option><option value="ai">+ AI polish (tiny model, server)</option></select>
+</div>
+<button id="mic" aria-label="Start dictation">🎙</button>
+<div id="status">tap the mic and talk. say "scratch that", "new paragraph", "copy that"</div>
+<div class="box"><h2>What you said</h2><div id="raw"></div></div>
+<div class="box"><h2>Clean text</h2><textarea id="out" placeholder="your clean text lands here"></textarea>
+ <div class="meta"><span id="wc">0 words</span><span id="timer"></span></div></div>
+<div class="row act"><button class="primary" id="copy">Copy</button><button id="wa">WhatsApp</button><button id="aiBtn">AI polish</button><button id="undo">Undo</button><button id="clear">Clear</button></div>
+<div class="box"><h2>Recent</h2><div id="hist"></div></div>
+<p class="tip">Works best in Chrome. Lists: say "first ... second ... third". Changed your mind: "monday oh no tuesday". Mains mode times you (7 min) and counts words (aim 150 or 250).</p>
+</main>
+<script src="/cleanup.js"></script>
+<script>
+const $=id=>document.getElementById(id);const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+let rec=null,on=false,finals='',stack=[],t0=0,tick=null;
+$('lang').value=localStorage.bolLang||'en-IN';$('mode').value=localStorage.bolMode||'plain';$('polish').value=localStorage.bolPolish||'rules';
+['lang','mode','polish'].forEach(k=>$(k).onchange=()=>localStorage['bol'+k[0].toUpperCase()+k.slice(1)]=$(k).value);
+function wc(){const n=($('out').value.match(/\S+/g)||[]).length;$('wc').textContent=n+' words'}
+function setOut(v,push=true){if(push)stack.push($('out').value);$('out').value=v;wc()}
+function append(text){const c=BolClean.clean(text);if(!c)return;let cur=$('out').value;
+ if($('mode').value==='notes'&&!/^\d+\./.test(c)){const n=(cur.match(/^\d+\./gm)||[]).length+1;setOut((cur?cur+'\n':'')+n+'. '+c.replace(/\.$/,''));return}
+ setOut(cur?(cur.endsWith('\n')?cur+c:cur+' '+c):c)}
+function doCmd(cmd){const v=$('out').value;
+ if(cmd==='delete_sentence'){setOut(v.replace(/[^.!?\n]*[.!?]?\s*$/,'').trimEnd());}
+ else if(cmd==='clear'){setOut('')} else if(cmd==='undo'){undo()} else if(cmd==='copy'){copy()} else if(cmd==='share'){share()} else if(cmd==='stop'){stop()}
+ $('status').textContent='done: '+cmd.replace('_',' ')}
+function start(){if(!SR){$('status').textContent='this browser has no speech input. open it in chrome';return}
+ rec=new SR();rec.lang=$('lang').value;rec.continuous=true;rec.interimResults=true;rec.maxAlternatives=1;
+ rec.onresult=e=>{let interim='';for(let i=e.resultIndex;i<e.results.length;i++){const r=e.results[i];
+  if(r.isFinal){const txt=r[0].transcript;const cmd=BolClean.command(txt);finals+=txt+' ';cmd?doCmd(cmd):append(txt)}else interim+=r[0].transcript}
+  $('raw').textContent=(finals+interim).trim()};
+ rec.onerror=e=>{$('status').textContent=e.error==='not-allowed'?'allow the mic in your browser settings':'mic: '+e.error};
+ rec.onend=()=>{if(on){try{rec.start()}catch(_){}}};
+ rec.start();on=true;$('mic').classList.add('on');$('status').textContent='listening… tap to stop';
+ if($('mode').value==='mains'){t0=Date.now();tick=setInterval(()=>{const s=Math.floor((Date.now()-t0)/1000);$('timer').textContent=(s>=420?'⏰ ':'')+Math.floor(s/60)+':'+String(s%60).padStart(2,'0')+' / 7:00'},1000)}}
+function stop(){on=false;if(rec)rec.stop();$('mic').classList.remove('on');clearInterval(tick);$('status').textContent='stopped';save();
+ if($('polish').value==='ai'&&$('out').value.trim())polish()}
+$('mic').onclick=()=>on?stop():start();
+function copy(){navigator.clipboard.writeText($('out').value).then(()=>$('status').textContent='copied')}
+function share(){location.href='https://wa.me/?text='+encodeURIComponent($('out').value)}
+function undo(){if(stack.length){$('out').value=stack.pop();wc()}}
+async function polish(){const text=$('out').value.trim();if(!text)return;$('status').textContent='polishing…';
+ try{const r=await fetch('/api/polish',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text,mode:$('mode').value,lang:$('lang').value})});
+  const j=await r.json();if(j.text){setOut(j.text);$('status').textContent='polished ('+j.model+')'}else $('status').textContent='polish unavailable, rules cleanup kept'}
+ catch(_){$('status').textContent='offline: rules cleanup kept'}}
+function save(){const v=$('out').value.trim();if(!v)return;const h=JSON.parse(localStorage.bolHist||'[]');if(h[0]!==v)h.unshift(v);localStorage.bolHist=JSON.stringify(h.slice(0,20));hist()}
+function hist(){const h=JSON.parse(localStorage.bolHist||'[]');$('hist').innerHTML='';h.forEach(v=>{const d=document.createElement('div');d.textContent=v.slice(0,120)+(v.length>120?'…':'');d.onclick=()=>setOut(v);$('hist').appendChild(d)})}
+$('copy').onclick=copy;$('wa').onclick=share;$('undo').onclick=undo;$('clear').onclick=()=>{setOut('');finals='';$('raw').textContent=''};$('aiBtn').onclick=polish;
+$('out').oninput=wc;hist();
+if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js');
+</script></body></html>
